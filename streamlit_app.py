@@ -1,6 +1,7 @@
 import streamlit as st
 import json
 import time
+import requests
 from datetime import datetime
 from typing import Optional, List, Dict
 
@@ -12,96 +13,100 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# Backend API URL - connects to Flask backend
+API_URL = "http://localhost:5000"
+
 # Initialize session state
-if 'invites' not in st.session_state:
-    st.session_state.invites = []
-
-if 'messages' not in st.session_state:
-    st.session_state.messages = {}
-
 if 'current_user' not in st.session_state:
     st.session_state.current_user = None
 
-if 'invite_counter' not in st.session_state:
-    st.session_state.invite_counter = 0
-
-# Styling
 def normalize_name(name: str) -> str:
     """Normalize user names: trim and lowercase"""
     return name.strip().lower() if name else ""
 
+def fetch_invites():
+    """Fetch all available invites from backend"""
+    try:
+        response = requests.get(f"{API_URL}/invites", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+    except:
+        st.error("Could not connect to backend. Make sure it's running on http://localhost:5000")
+    return []
+
+def fetch_all_events():
+    """Fetch all events (including full ones) from backend"""
+    try:
+        response = requests.get(f"{API_URL}/all-events", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+    except:
+        pass
+    return []
+
 def create_invite(host: str, time: str, location: str, detail: str, spots: int, 
-                  beverages: List[str], fun_fact: str) -> Dict:
-    """Create a new coffee event"""
-    st.session_state.invite_counter += 1
-    invite_id = st.session_state.invite_counter
-    
-    invite = {
-        'id': invite_id,
-        'host': normalize_name(host),
-        'time': time,
-        'location': location,
-        'detail': detail,
-        'spots': spots,
-        'original_spots': spots,
-        'beverages': beverages,
-        'fun_fact': fun_fact,
-        'guests': [],
-        'created_at': datetime.now().isoformat()
-    }
-    
-    st.session_state.invites.append(invite)
-    st.session_state.messages[invite_id] = []
-    
-    return invite
+                  beverages: List[str], fun_fact: str) -> bool:
+    """Create a new coffee event via backend"""
+    try:
+        payload = {
+            'host': host,
+            'time': time,
+            'location': location,
+            'detail': detail,
+            'spots': spots,
+            'beverages': beverages,
+            'fun_fact': fun_fact
+        }
+        response = requests.post(f"{API_URL}/invites", json=payload, timeout=5)
+        return response.status_code == 201
+    except:
+        st.error("Error creating event")
+    return False
 
 def join_event(invite_id: int, guest_name: str) -> bool:
-    """Guest joins an event"""
-    guest_name = normalize_name(guest_name)
-    
-    for invite in st.session_state.invites:
-        if invite['id'] == invite_id:
-            if invite['spots'] <= 0:
-                return False
-            
-            if guest_name in invite['guests']:
-                return False
-            
-            invite['spots'] -= 1
-            invite['guests'].append(guest_name)
-            
-            return True
-    
+    """Guest joins an event via backend"""
+    try:
+        payload = {
+            'id': invite_id,
+            'guestName': guest_name
+        }
+        response = requests.post(f"{API_URL}/join", json=payload, timeout=5)
+        return response.status_code == 200
+    except:
+        st.error("Error joining event")
     return False
 
 def send_message(invite_id: int, sender: str, text: str) -> bool:
-    """Send a message"""
-    sender = normalize_name(sender)
-    
-    if invite_id not in st.session_state.messages:
-        st.session_state.messages[invite_id] = []
-    
-    st.session_state.messages[invite_id].append({
-        'sender': sender,
-        'text': text,
-        'timestamp': datetime.now().isoformat()
-    })
-    
-    return True
+    """Send a message via backend"""
+    try:
+        payload = {
+            'sender': sender,
+            'text': text
+        }
+        response = requests.post(f"{API_URL}/messages/{invite_id}", json=payload, timeout=5)
+        return response.status_code == 200
+    except:
+        st.error("Error sending message")
+    return False
+
+def fetch_messages(invite_id: int) -> List:
+    """Fetch messages for an event"""
+    try:
+        response = requests.get(f"{API_URL}/messages/{invite_id}", timeout=5)
+        if response.status_code == 200:
+            return response.json()
+    except:
+        pass
+    return []
 
 def delete_event(invite_id: int, host: str) -> bool:
-    """Delete an event (host only)"""
-    host = normalize_name(host)
-    
-    for i, invite in enumerate(st.session_state.invites):
-        if invite['id'] == invite_id:
-            if invite['host'] != host:
-                return False
-            
-            st.session_state.invites.pop(i)
-            st.session_state.messages.pop(invite_id, None)
-            return True
-    
+    """Delete an event (host only) via backend"""
+    try:
+        payload = {'host': host}
+        response = requests.delete(f"{API_URL}/invites/{invite_id}", json=payload, timeout=5)
+        return response.status_code == 200
+    except:
+        st.error("Error deleting event")
     return False
 
 # Main UI
@@ -233,7 +238,8 @@ else:
                             st.rerun()
         
         # Display available events
-        available = [i for i in st.session_state.invites if i['spots'] > 0 and i['host'] != st.session_state.current_user]
+        available = fetch_invites()
+        available = [i for i in available if i.get('host', '').lower() != (st.session_state.current_user or '')]
         
         if not available:
             st.info("☕ No sessions available. Be the first to host!")
@@ -245,20 +251,20 @@ else:
                 <div class="event-card">
                     <div style="display: flex; justify-content: space-between; align-items: start;">
                         <div>
-                            <h4 style="margin: 0;">{invite['host'].title()}</h4>
-                            <p style="color: #A89880; margin: 5px 0;">🍵 {', '.join(invite['beverages'])}</p>
+                            <h4 style="margin: 0;">{invite.get('host', 'Unknown').title()}</h4>
+                            <p style="color: #A89880; margin: 5px 0;">🍵 {', '.join(invite.get('beverages', []))}</p>
                         </div>
                         <span class="host-badge">HOST</span>
                     </div>
                     <hr style="margin: 10px 0;">
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
-                        <p style="margin: 0;"><strong>📍</strong> {invite['location']}{' - ' + invite['detail'] if invite['detail'] else ''}</p>
-                        <p style="margin: 0;"><strong>⏰</strong> {invite['time']}</p>
+                        <p style="margin: 0;"><strong>📍</strong> {invite.get('location', '')}{' - ' + invite.get('detail', '') if invite.get('detail') else ''}</p>
+                        <p style="margin: 0;"><strong>⏰</strong> {invite.get('time', '')}</p>
                     </div>
-                    <p style="margin: 5px 0; font-style: italic; color: #8B5A3B;">"{invite['fun_fact']}"</p>
+                    <p style="margin: 5px 0; font-style: italic; color: #8B5A3B;">"{invite.get('fun_fact', '')}"</p>
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 10px;">
-                        <span>👥 {invite['spots']} spot{'s' if invite['spots'] != 1 else ''} available
-                        {'<span class="full-badge">FULL</span>' if invite['spots'] == 0 else ''}</span>
+                        <span>👥 {invite.get('spots', 0)} spot{'s' if invite.get('spots', 0) != 1 else ''} available
+                        {'<span class="full-badge">FULL</span>' if invite.get('spots', 0) == 0 else ''}</span>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -267,7 +273,7 @@ else:
                 with col2:
                     if st.button("Join ☕", key=f"join_{invite['id']}", use_container_width=True):
                         if join_event(invite['id'], st.session_state.current_user):
-                            st.success(f"✅ Joined {invite['host']}'s session!")
+                            st.success(f"✅ Joined {invite.get('host', 'host').title()}'s session!")
                             st.rerun()
                         else:
                             st.error("❌ Could not join session")
@@ -277,8 +283,10 @@ else:
         st.header("💕 My Events")
         
         user_normalized = normalize_name(st.session_state.current_user)
-        my_hosted = [i for i in st.session_state.invites if i['host'] == user_normalized]
-        my_joined = [i for i in st.session_state.invites if user_normalized in i['guests']]
+        all_events = fetch_all_events()
+        
+        my_hosted = [i for i in all_events if normalize_name(i.get('host', '')) == user_normalized]
+        my_joined = [i for i in all_events if user_normalized in [normalize_name(g) for g in i.get('guests', [])]]
         
         if not my_hosted and not my_joined:
             st.info("No events yet. Host one or join a live session!")
@@ -290,19 +298,23 @@ else:
                         col1, col2, col3 = st.columns([2, 1, 1])
                         
                         with col1:
-                            st.markdown(f"**📍 {invite['location']}** {invite['detail']}")
-                            st.markdown(f"⏰ {invite['time']}")
-                            st.markdown(f"🍵 {', '.join(invite['beverages'])}")
+                            st.markdown(f"**📍 {invite.get('location', '')}** {invite.get('detail', '')}")
+                            st.markdown(f"⏰ {invite.get('time', '')}")
+                            st.markdown(f"🍵 {', '.join(invite.get('beverages', []))}")
                         
                         with col2:
-                            capacity_pct = (1 - invite['spots'] / invite['original_spots']) * 100
-                            st.metric("Capacity", f"{invite['original_spots'] - invite['spots']}/{invite['original_spots']}")
+                            original = invite.get('original_spots', 1)
+                            current = invite.get('spots', 0)
+                            joined = original - current
+                            capacity_pct = (joined / original) * 100 if original > 0 else 0
+                            st.metric("Capacity", f"{joined}/{original}")
                             st.progress(capacity_pct / 100)
                         
                         with col3:
-                            if invite['guests']:
+                            guests = invite.get('guests', [])
+                            if guests:
                                 st.markdown("**Guests:**")
-                                for guest in invite['guests']:
+                                for guest in guests:
                                     st.markdown(f"• {guest.title()}")
                             else:
                                 st.info("Waiting for guests...")
@@ -329,9 +341,9 @@ else:
                         col1, col2 = st.columns([3, 1])
                         
                         with col1:
-                            st.markdown(f"**☕ With {invite['host'].title()}**")
-                            st.markdown(f"📍 {invite['location']} {invite['detail']}")
-                            st.markdown(f"⏰ {invite['time']}")
+                            st.markdown(f"**☕ With {invite.get('host', '').title()}**")
+                            st.markdown(f"📍 {invite.get('location', '')} {invite.get('detail', '')}")
+                            st.markdown(f"⏰ {invite.get('time', '')}")
                         
                         with col2:
                             if st.button("💬 Chat", key=f"chat_joined_{invite['id']}", use_container_width=True):
@@ -343,8 +355,11 @@ else:
         st.header("💬 Messages")
         
         user_normalized = normalize_name(st.session_state.current_user)
-        user_events = [i for i in st.session_state.invites 
-                       if i['host'] == user_normalized or user_normalized in i['guests']]
+        all_events = fetch_all_events()
+        
+        user_events = [i for i in all_events 
+                       if normalize_name(i.get('host', '')) == user_normalized or 
+                          user_normalized in [normalize_name(g) for g in i.get('guests', [])]]
         
         if not user_events:
             st.info("No conversations yet!")
@@ -352,20 +367,21 @@ else:
             st.markdown(f"### {len(user_events)} Conversation(s)")
             
             for invite in user_events:
-                msg_count = len(st.session_state.messages.get(invite['id'], []))
+                messages = fetch_messages(invite['id'])
+                msg_count = len(messages)
                 
                 with st.container(border=True):
                     col1, col2, col3 = st.columns([2, 1, 1])
                     
                     with col1:
-                        st.markdown(f"📍 **{invite['location']}** {invite['detail']}")
-                        st.markdown(f"⏰ {invite['time']}")
+                        st.markdown(f"📍 **{invite.get('location', '')}** {invite.get('detail', '')}")
+                        st.markdown(f"⏰ {invite.get('time', '')}")
                     
                     with col2:
-                        if invite['spots'] == 0:
+                        if invite.get('spots', 0) == 0:
                             st.markdown("🔴 **Full**")
                         else:
-                            st.markdown(f"👥 {invite['spots']} spots")
+                            st.markdown(f"👥 {invite.get('spots', 0)} spots")
                     
                     with col3:
                         st.markdown(f"💬 **{msg_count}** messages")
@@ -379,19 +395,20 @@ else:
         event_id = st.session_state.get('selected_event_id')
         
         # Find the event
-        event = next((i for i in st.session_state.invites if i['id'] == event_id), None)
+        all_events = fetch_all_events()
+        event = next((i for i in all_events if i['id'] == event_id), None)
         
         if event:
             st.divider()
-            st.subheader(f"💬 Chat - {event['location']}")
+            st.subheader(f"💬 Chat - {event.get('location', '')}")
             
             # Display messages
-            messages = st.session_state.messages.get(event_id, [])
+            messages = fetch_messages(event_id)
             
             if messages:
                 for msg in messages:
-                    with st.chat_message(msg['sender'].title()):
-                        st.write(msg['text'])
+                    with st.chat_message(msg.get('sender', 'Unknown').title()):
+                        st.write(msg.get('text', ''))
             else:
                 st.info("No messages yet. Start the conversation!")
             
@@ -404,8 +421,10 @@ else:
             with col2:
                 if st.button("Send", use_container_width=True):
                     if new_message.strip():
-                        send_message(event_id, st.session_state.current_user, new_message)
-                        st.rerun()
+                        if send_message(event_id, st.session_state.current_user, new_message):
+                            st.rerun()
+                        else:
+                            st.warning("Could not send message")
                     else:
                         st.warning("Message cannot be empty")
             

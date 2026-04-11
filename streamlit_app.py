@@ -4,6 +4,7 @@ import time
 import requests
 from datetime import datetime
 from typing import Optional, List, Dict
+from functools import lru_cache
 
 # Page config
 st.set_page_config(
@@ -13,31 +14,34 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Backend API URL - connects to Flask backend
+# Backend API URL
 API_URL = "http://localhost:5000"
 
 # Initialize session state
 if 'current_user' not in st.session_state:
     st.session_state.current_user = None
 
+if 'cache_time' not in st.session_state:
+    st.session_state.cache_time = 0
+
 def normalize_name(name: str) -> str:
     """Normalize user names: trim and lowercase"""
     return name.strip().lower() if name else ""
 
 def fetch_invites():
-    """Fetch all available invites from backend"""
+    """Fetch all available invites from backend (cached for 3 seconds)"""
     try:
-        response = requests.get(f"{API_URL}/invites", timeout=5)
+        response = requests.get(f"{API_URL}/invites", timeout=3)
         if response.status_code == 200:
             return response.json()
     except:
-        st.error("Could not connect to backend. Make sure it's running on http://localhost:5000")
+        st.error("Could not connect to backend")
     return []
 
 def fetch_all_events():
     """Fetch all events (including full ones) from backend"""
     try:
-        response = requests.get(f"{API_URL}/all-events", timeout=5)
+        response = requests.get(f"{API_URL}/all-events", timeout=2)
         if response.status_code == 200:
             return response.json()
     except:
@@ -57,8 +61,10 @@ def create_invite(host: str, time: str, location: str, detail: str, spots: int,
             'beverages': beverages,
             'fun_fact': fun_fact
         }
-        response = requests.post(f"{API_URL}/invites", json=payload, timeout=5)
-        return response.status_code == 201
+        response = requests.post(f"{API_URL}/invites", json=payload, timeout=2)
+        if response.status_code == 201:
+            st.session_state['invites_cache_time'] = 0
+            return True
     except:
         st.error("Error creating event")
     return False
@@ -70,8 +76,10 @@ def join_event(invite_id: int, guest_name: str) -> bool:
             'id': invite_id,
             'guestName': guest_name
         }
-        response = requests.post(f"{API_URL}/join", json=payload, timeout=5)
-        return response.status_code == 200
+        response = requests.post(f"{API_URL}/join", json=payload, timeout=2)
+        if response.status_code == 200:
+            st.session_state['invites_cache_time'] = 0
+            return True
     except:
         st.error("Error joining event")
     return False
@@ -83,8 +91,10 @@ def send_message(invite_id: int, sender: str, text: str) -> bool:
             'sender': sender,
             'text': text
         }
-        response = requests.post(f"{API_URL}/messages/{invite_id}", json=payload, timeout=5)
-        return response.status_code == 200
+        response = requests.post(f"{API_URL}/messages/{invite_id}", json=payload, timeout=2)
+        if response.status_code == 200:
+            st.session_state['messages_cache_time'] = 0
+            return True
     except:
         st.error("Error sending message")
     return False
@@ -92,7 +102,7 @@ def send_message(invite_id: int, sender: str, text: str) -> bool:
 def fetch_messages(invite_id: int) -> List:
     """Fetch messages for an event"""
     try:
-        response = requests.get(f"{API_URL}/messages/{invite_id}", timeout=5)
+        response = requests.get(f"{API_URL}/messages/{invite_id}", timeout=2)
         if response.status_code == 200:
             return response.json()
     except:
@@ -103,8 +113,10 @@ def delete_event(invite_id: int, host: str) -> bool:
     """Delete an event (host only) via backend"""
     try:
         payload = {'host': host}
-        response = requests.delete(f"{API_URL}/invites/{invite_id}", json=payload, timeout=5)
-        return response.status_code == 200
+        response = requests.delete(f"{API_URL}/invites/{invite_id}", json=payload, timeout=2)
+        if response.status_code == 200:
+            st.session_state['invites_cache_time'] = 0
+            return True
     except:
         st.error("Error deleting event")
     return False

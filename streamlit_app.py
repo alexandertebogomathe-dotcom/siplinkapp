@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Optional, List, Dict
 from functools import lru_cache
 
+# App Version: v2.1.0 - Fixed deployment with streamlit>=1.30.0
+
 # Page config
 st.set_page_config(
     page_title="☕ Sip&Link - Meet someone for coffee",

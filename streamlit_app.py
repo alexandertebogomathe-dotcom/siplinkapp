@@ -16,8 +16,16 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Backend API URL
+# Backend API URL  
 API_URL = "http://localhost:5000"
+BACKEND_AVAILABLE = False
+
+# Check backend availability on startup
+try:
+    response = requests.get(f"{API_URL}/invites", timeout=1)
+    BACKEND_AVAILABLE = response.status_code == 200
+except:
+    BACKEND_AVAILABLE = False
 
 # Initialize session state
 if 'current_user' not in st.session_state:
@@ -26,102 +34,133 @@ if 'current_user' not in st.session_state:
 if 'cache_time' not in st.session_state:
     st.session_state.cache_time = 0
 
+if 'invites' not in st.session_state:
+    st.session_state.invites = []
+
+if 'events' not in st.session_state:
+    st.session_state.events = {}
+
 def normalize_name(name: str) -> str:
     """Normalize user names: trim and lowercase"""
     return name.strip().lower() if name else ""
 
 def fetch_invites():
-    """Fetch all available invites from backend (cached for 3 seconds)"""
-    try:
-        response = requests.get(f"{API_URL}/invites", timeout=3)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        st.error("Could not connect to backend")
-    return []
+    """Fetch all available invites from backend or session state"""
+    if BACKEND_AVAILABLE:
+        try:
+            response = requests.get(f"{API_URL}/invites", timeout=2)
+            if response.status_code == 200:
+                return response.json()
+        except:
+            pass
+    # Fallback to session state
+    return st.session_state.get('invites', [])
 
 def fetch_all_events():
-    """Fetch all events (including full ones) from backend"""
-    try:
-        response = requests.get(f"{API_URL}/all-events", timeout=2)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        pass
-    return []
+    """Fetch all events from backend or session state"""
+    if BACKEND_AVAILABLE:
+        try:
+            response = requests.get(f"{API_URL}/all-events", timeout=2)
+            if response.status_code == 200:
+                return response.json()
+        except:
+            pass
+    # Fallback to session state
+    return st.session_state.get('events', {})
 
 def create_invite(host: str, time: str, location: str, detail: str, spots: int, 
                   beverages: List[str], fun_fact: str) -> bool:
-    """Create a new coffee event via backend"""
-    try:
-        payload = {
-            'host': host,
-            'time': time,
-            'location': location,
-            'detail': detail,
-            'spots': spots,
-            'beverages': beverages,
-            'fun_fact': fun_fact
-        }
-        response = requests.post(f"{API_URL}/invites", json=payload, timeout=2)
-        if response.status_code == 201:
-            st.session_state['invites_cache_time'] = 0
-            return True
-    except:
-        st.error("Error creating event")
-    return False
+    """Create a new coffee event"""
+    if BACKEND_AVAILABLE:
+        try:
+            payload = {
+                'host': host,
+                'time': time,
+                'location': location,
+                'detail': detail,
+                'spots': spots,
+                'beverages': beverages,
+                'fun_fact': fun_fact
+            }
+            response = requests.post(f"{API_URL}/invites", json=payload, timeout=2)
+            if response.status_code == 201:
+                return True
+        except:
+            pass
+    # Fallback: add to session state
+    event_id = len(st.session_state.get('invites', [])) + 1
+    new_event = {
+        'id': event_id, 'host': host, 'time': time, 'location': location,
+        'detail': detail, 'spots': spots, 'beverages': beverages, 'fun_fact': fun_fact, 'guests': []
+    }
+    st.session_state.invites.append(new_event)
+    return True
 
 def join_event(invite_id: int, guest_name: str) -> bool:
-    """Guest joins an event via backend"""
-    try:
-        payload = {
-            'id': invite_id,
-            'guestName': guest_name
-        }
-        response = requests.post(f"{API_URL}/join", json=payload, timeout=2)
-        if response.status_code == 200:
-            st.session_state['invites_cache_time'] = 0
+    """Guest joins an event"""
+    if BACKEND_AVAILABLE:
+        try:
+            payload = {'id': invite_id, 'guestName': guest_name}
+            response = requests.post(f"{API_URL}/join", json=payload, timeout=2)
+            if response.status_code == 200:
+                return True
+        except:
+            pass
+    # Fallback: add to session state
+    for invite in st.session_state.get('invites', []):
+        if invite.get('id') == invite_id:
+            if 'guests' not in invite:
+                invite['guests'] = []
+            invite['guests'].append(guest_name)
             return True
-    except:
-        st.error("Error joining event")
     return False
 
 def send_message(invite_id: int, sender: str, text: str) -> bool:
-    """Send a message via backend"""
-    try:
-        payload = {
-            'sender': sender,
-            'text': text
-        }
-        response = requests.post(f"{API_URL}/messages/{invite_id}", json=payload, timeout=2)
-        if response.status_code == 200:
-            st.session_state['messages_cache_time'] = 0
-            return True
-    except:
-        st.error("Error sending message")
-    return False
+    """Send a message"""
+    if BACKEND_AVAILABLE:
+        try:
+            payload = {'sender': sender, 'text': text}
+            response = requests.post(f"{API_URL}/messages/{invite_id}", json=payload, timeout=2)
+            if response.status_code == 200:
+                return True
+        except:
+            pass
+    # Fallback: add to session state
+    if 'messages' not in st.session_state:
+        st.session_state.messages = {}
+    if invite_id not in st.session_state.messages:
+        st.session_state.messages[invite_id] = []
+    st.session_state.messages[invite_id].append({'sender': sender, 'text': text, 'timestamp': datetime.now().isoformat()})
+    return True
 
 def fetch_messages(invite_id: int) -> List:
     """Fetch messages for an event"""
-    try:
-        response = requests.get(f"{API_URL}/messages/{invite_id}", timeout=2)
-        if response.status_code == 200:
-            return response.json()
-    except:
-        pass
-    return []
+    if BACKEND_AVAILABLE:
+        try:
+            response = requests.get(f"{API_URL}/messages/{invite_id}", timeout=2)
+            if response.status_code == 200:
+                return response.json()
+        except:
+            pass
+    # Fallback: get from session state
+    if 'messages' not in st.session_state:
+        st.session_state.messages = {}
+    return st.session_state.messages.get(invite_id, [])
 
 def delete_event(invite_id: int, host: str) -> bool:
-    """Delete an event (host only) via backend"""
-    try:
-        payload = {'host': host}
-        response = requests.delete(f"{API_URL}/invites/{invite_id}", json=payload, timeout=2)
-        if response.status_code == 200:
-            st.session_state['invites_cache_time'] = 0
-            return True
-    except:
-        st.error("Error deleting event")
-    return False
+    """Delete an event (host only)"""
+    if BACKEND_AVAILABLE:
+        try:
+            payload = {'host': host}
+            response = requests.delete(f"{API_URL}/invites/{invite_id}", json=payload, timeout=2)
+            if response.status_code == 200:
+                return True
+        except:
+            pass
+    # Fallback: remove from session state
+    st.session_state.invites = [inv for inv in st.session_state.get('invites', []) 
+                                 if inv.get('id') != invite_id or inv.get('host') != host]
+    return True
 
 # Main UI
 st.markdown("""
